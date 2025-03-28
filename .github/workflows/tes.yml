@@ -1,70 +1,47 @@
-name: Windows RDP with Ngrok (6 Hours)
+name: RDP via Ngrok
 
-on:
-  workflow_dispatch:
+on: [workflow_dispatch]
 
 jobs:
-  rdp-access:
+  rdp:
     runs-on: windows-2022
-    timeout-minutes: 360
+    timeout-minutes: 360 # 6 hours max allowed by GitHub
 
     steps:
-      - name: Setup RDP and Firewall
-        run: |
-          net user runneradmin YourSecurePass123!
-          net localgroup "Remote Desktop Users" runneradmin /add
-          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          echo "✅ RDP enabled and firewall configured"
+    - name: Download Ngrok
+      run: |
+        Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath $Env:USERPROFILE\ngrok
 
-      - name: Download and Unzip Ngrok
-        run: |
-          Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-          Expand-Archive ngrok.zip -DestinationPath $env:USERPROFILE\ngrok
-          echo "✅ Ngrok downloaded and extracted"
+    - name: Authenticate Ngrok
+      run: |
+        $Env:Path += ";$Env:USERPROFILE\ngrok"
+        ngrok config add-authtoken $Env:NGROK_AUTH_TOKEN
 
-      - name: Add Ngrok Authtoken
-        run: |
-          $Env:NGROK_AUTHTOKEN = "${{ secrets.NGROK_AUTH_TOKEN }}"
-          & "$env:USERPROFILE\ngrok\ngrok.exe" config add-authtoken $Env:NGROK_AUTHTOKEN
+    - name: Enable RDP
+      run: |
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+        Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
 
-      - name: Start Ngrok TCP Tunnel (3389)
-        run: |
-          Start-Job -ScriptBlock {
-            & "$env:USERPROFILE\ngrok\ngrok.exe" tcp 3389
-          }
-          echo "⏳ Waiting for Ngrok to initialize..."
-          $maxRetries = 30
-          $retry = 0
-          while ($retry -lt $maxRetries) {
-            try {
-              $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-              if ($response.tunnels.Count -gt 0) { break }
-            } catch {
-              Start-Sleep -Seconds 2
-              $retry++
-              Write-Host "Waiting for ngrok... attempt $retry"
-            }
-          }
-          if ($retry -eq $maxRetries) {
-            Write-Error "❌ Ngrok failed to initialize within expected time."
-            exit 1
-          }
+    - name: Set RDP Password
+      run: |
+        net user runneradmin "GitHub@12345"
 
-      - name: Display RDP Information
-        run: |
-          $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-          $rdpAddress = $response.tunnels[0].public_url -replace "tcp://", ""
-          echo "============================================"
-          echo "✅ RDP Session is Ready"
-          echo "Address   : $rdpAddress"
-          echo "Username  : runneradmin"
-          echo "Password  : YourSecurePass123!"
-          echo "============================================"
+    - name: Start Ngrok Tunnel
+      run: |
+        Start-Process -NoNewWindow -FilePath "$Env:USERPROFILE\ngrok\ngrok.exe" -ArgumentList "tcp 3389"
 
-      - name: Keep the Session Alive (6 Hours)
-        run: |
-          for ($i = 0; $i -lt 360; $i++) {
-            Write-Host "Keeping alive... $i minutes"
-            Start-Sleep -Seconds 60
-          }
+    - name: Show Connection Info
+      run: |
+        Start-Sleep -Seconds 20
+        $tunnelInfo = Invoke-RestMethod -Uri http://127.0.0.1:4040/api/tunnels
+        $publicUrl = $tunnelInfo.tunnels[0].public_url
+        Write-Host "🔗 Connect to your RDP via:"
+        Write-Host "👉 Host: $($publicUrl -replace 'tcp://', '')"
+        Write-Host "🧑‍💻 User: runneradmin"
+        Write-Host "🔐 Pass: GitHub@12345"
+
+    - name: Keep Alive
+      run: |
+        Write-Host "🕒 Keeping runner alive for 6 hours..."
+        Start-Sleep -Seconds 21600 # 6 hours
