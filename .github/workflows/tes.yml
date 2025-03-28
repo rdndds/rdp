@@ -1,0 +1,56 @@
+name: Windows RDP with Ngrok (6 Hours)
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  rdp-access:
+    runs-on: windows-2022
+    timeout-minutes: 360  # Maksimal 6 jam
+
+    steps:
+      - name: Enable RDP and set password
+        run: |
+          net user runneradmin yourSecurePassword123!
+          net localgroup "Remote Desktop Users" runneradmin /add
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          echo "RDP enabled and password set."
+
+      - name: Download Ngrok
+        run: |
+          Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+          Expand-Archive ngrok.zip -DestinationPath $env:USERPROFILE\ngrok
+          echo "Ngrok downloaded and extracted."
+
+      - name: Connect Ngrok Account
+        run: |
+          $Env:NGROK_AUTHTOKEN = "${{ secrets.NGROK_AUTH_TOKEN }}"
+          & "$env:USERPROFILE\ngrok\ngrok.exe" config add-authtoken $Env:NGROK_AUTHTOKEN
+
+      - name: Start Ngrok Tunnel for RDP
+        run: |
+          Start-Process -NoNewWindow -FilePath "$env:USERPROFILE\ngrok\ngrok.exe" -ArgumentList "tcp 3389"
+          echo "Ngrok tunnel started."
+
+      - name: Wait for Ngrok to initialize
+        run: Start-Sleep -Seconds 10
+
+      - name: Show Ngrok Public Address
+        run: |
+          $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+          $rdp = $response.tunnels[0].public_url -replace "tcp://", ""
+          echo "============================================"
+          echo " RDP Address: $rdp"
+          echo " Username   : runneradmin"
+          echo " Password   : yourSecurePassword123!"
+          echo "============================================"
+          echo "::set-output name=rdp::$rdp"
+        id: get_ngrok_url
+
+      - name: Keep session alive for 6 hours
+        run: |
+          for ($i = 0; $i -lt 360; $i++) {
+            Write-Output "Minute $i of 360 - RDP session active"
+            Start-Sleep -Seconds 60
+          }
