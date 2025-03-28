@@ -1,56 +1,70 @@
 name: Windows RDP with Ngrok (6 Hours)
 
-on: 
+on:
   workflow_dispatch:
 
 jobs:
   rdp-access:
     runs-on: windows-2022
-    timeout-minutes: 360  # Maksimal 6 jam
+    timeout-minutes: 360
 
     steps:
-      - name: Enable RDP and set password
+      - name: Setup RDP and Firewall
         run: |
-          net user runneradmin yourSecurePassword123!
+          net user runneradmin YourSecurePass123!
           net localgroup "Remote Desktop Users" runneradmin /add
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          echo "RDP enabled and password set."
+          echo "✅ RDP enabled and firewall configured"
 
-      - name: Download Ngrok
+      - name: Download and Unzip Ngrok
         run: |
           Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
           Expand-Archive ngrok.zip -DestinationPath $env:USERPROFILE\ngrok
-          echo "Ngrok downloaded and extracted."
+          echo "✅ Ngrok downloaded and extracted"
 
-      - name: Connect Ngrok Account
+      - name: Add Ngrok Authtoken
         run: |
           $Env:NGROK_AUTHTOKEN = "${{ secrets.NGROK_AUTH_TOKEN }}"
           & "$env:USERPROFILE\ngrok\ngrok.exe" config add-authtoken $Env:NGROK_AUTHTOKEN
 
-      - name: Start Ngrok Tunnel for RDP
+      - name: Start Ngrok TCP Tunnel (3389)
         run: |
-          Start-Process -NoNewWindow -FilePath "$env:USERPROFILE\ngrok\ngrok.exe" -ArgumentList "tcp 3389"
-          echo "Ngrok tunnel started."
+          Start-Job -ScriptBlock {
+            & "$env:USERPROFILE\ngrok\ngrok.exe" tcp 3389
+          }
+          echo "⏳ Waiting for Ngrok to initialize..."
+          $maxRetries = 30
+          $retry = 0
+          while ($retry -lt $maxRetries) {
+            try {
+              $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+              if ($response.tunnels.Count -gt 0) { break }
+            } catch {
+              Start-Sleep -Seconds 2
+              $retry++
+              Write-Host "Waiting for ngrok... attempt $retry"
+            }
+          }
+          if ($retry -eq $maxRetries) {
+            Write-Error "❌ Ngrok failed to initialize within expected time."
+            exit 1
+          }
 
-      - name: Wait for Ngrok to initialize
-        run: Start-Sleep -Seconds 10
-
-      - name: Show Ngrok Public Address
+      - name: Display RDP Information
         run: |
           $response = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-          $rdp = $response.tunnels[0].public_url -replace "tcp://", ""
+          $rdpAddress = $response.tunnels[0].public_url -replace "tcp://", ""
           echo "============================================"
-          echo " RDP Address: $rdp"
-          echo " Username   : runneradmin"
-          echo " Password   : yourSecurePassword123!"
+          echo "✅ RDP Session is Ready"
+          echo "Address   : $rdpAddress"
+          echo "Username  : runneradmin"
+          echo "Password  : YourSecurePass123!"
           echo "============================================"
-          echo "::set-output name=rdp::$rdp"
-        id: get_ngrok_url
 
-      - name: Keep session alive for 6 hours
+      - name: Keep the Session Alive (6 Hours)
         run: |
           for ($i = 0; $i -lt 360; $i++) {
-            Write-Output "Minute $i of 360 - RDP session active"
+            Write-Host "Keeping alive... $i minutes"
             Start-Sleep -Seconds 60
           }
